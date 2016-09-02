@@ -65,6 +65,20 @@ if sys.version_info < (3, ):
     INTEGRAL_TYPES += (long, )  # noqa
 
 
+class TooFewSamples(Exception):
+    """Raised when the number of samples is too small to compute fit goodness.
+
+    This exception indicates that calling code must provide more samples
+    to the goodness-of-fit functions.
+
+    """
+
+    def __init__(self, *args, **kw):
+        arg0, *rest = args
+        args = ('imprecise test, use more samples: {}'.format(arg0), *rest)
+        super().__init__(*args, **kw)
+
+
 def seed_all(seed):
     random.seed(seed)
     numpy.random.seed(seed)
@@ -92,15 +106,27 @@ def multinomial_goodness_of_fit(
         total_count,
         truncated=False,
         plot=False):
-    """
-    Pearson's chi^2 test, on possibly truncated data.
+    """Pearson's chi^2 test, on possibly truncated data.
     http://en.wikipedia.org/wiki/Pearson%27s_chi-squared_test
 
     Returns:
         p-value of truncated multinomial sample.
+
+    If the number of probabilities does not equal the number of counts,
+    then this function raises :exc:`ValueError`. If the total count does
+    not equal the sum of each count, then this function raises
+    :exc:`ValueError`. If any of the probabilities is not in the closed
+    interval [0, 1], then this function raises :exc:`ValueError`. If the
+    computed variance for any of the samples is less than or equal to
+    one, then this function raises :exc:`.TooFewSamples`.
+
     """
-    assert len(probs) == len(counts)
-    assert truncated or total_count == sum(counts)
+    if len(probs) != len(counts):
+        msg = 'number of probabilities ({}) must equal number of counts ({})'
+        raise ValueError(msg.format(len(probs), len(counts)))
+    if not truncated and sum(counts) != total_count:
+        msg = 'sum of counts ({}) must equal total_count ({})'
+        raise ValueError(msg.format(sum(counts), total_count))
     chi_squared = 0
     dof = 0
     if plot:
@@ -108,12 +134,14 @@ def multinomial_goodness_of_fit(
     for p, c in zip(probs, counts):
         if p == 1:
             return 1 if c == total_count else 0
-        assert p < 1, 'bad probability: %g' % p
+        if p > 1:
+            msg = 'probability {} cannot be greater than one'
+            raise ValueError(msg.format(p))
         if p > 0:
             mean = total_count * p
             variance = total_count * p * (1 - p)
-            assert variance > 1,\
-                'WARNING goodness of fit is inaccurate; use more samples'
+            if variance <= 1:
+                raise TooFewSamples('variance is too small')
             chi_squared += (c - mean) ** 2 / variance
             dof += 1
         else:
@@ -129,14 +157,18 @@ def multinomial_goodness_of_fit(
 
 
 def unif01_goodness_of_fit(samples, plot=False):
+    """Bin uniformly distributed samples and apply Pearson's chi^2 test.
+
+    This function raises :exc:`ValueError` if any sample is not in the
+    interval [0, 1]. If the number of bins is fewer than seven, this
+    function raises :class:`.TooFewSamples`.
+
     """
-    Bin uniformly distributed samples and apply Pearson's chi^2 test.
-    """
-    samples = numpy.array(samples, dtype=float)
-    assert samples.min() >= 0.0
-    assert samples.max() <= 1.0
+    if not all(0 <= s <= 1 for s in samples):
+        raise ValueError('each sample must be between zero and one, inclusive')
     bin_count = int(round(len(samples) ** 0.333))
-    assert bin_count >= 7, 'WARNING imprecise test, use more samples'
+    if bin_count < 7:
+        raise TooFewSamples('number of bins is too small')
     probs = numpy.ones(bin_count, dtype=numpy.float) / bin_count
     counts = numpy.zeros(bin_count, dtype=numpy.int)
     for sample in samples:
@@ -171,16 +203,24 @@ def density_goodness_of_fit(
         plot=False,
         normalized=True,
         return_dict=False):
-    """
-    Transform arbitrary continuous samples to unif01 distribution
+    """Transform arbitrary continuous samples to unif01 distribution
     and assess goodness of fit via binned Pearson's chi^2 test.
 
     Inputs:
         samples - a list of real-valued samples from a distribution
         probs - a list of probability densities evaluated at those samples
+
+    If the number of probabilities does not equal the number of samples,
+    then this function raises :exc:`ValueError`. If the number of
+    samples is less than or equal to one hundred, then this function
+    raises :exc:`.TooFewSamples`.
+
     """
-    assert len(samples) == len(probs)
-    assert len(samples) > 100, 'WARNING imprecision; use more samples'
+    if len(probs) != len(samples):
+        msg = 'number of probabilities ({}) must equal number of samples ({})'
+        raise ValueError(msg.format(len(probs), len(samples)))
+    if len(samples) <= 100:
+        raise TooFewSamples('got {} samples', len(samples))
     pairs = list(zip(samples, probs))
     pairs.sort()
     samples = numpy.array([x for x, p in pairs])
@@ -192,7 +232,14 @@ def density_goodness_of_fit(
 
 
 def volume_of_sphere(dim, radius):
-    assert isinstance(dim, INTEGRAL_TYPES)
+    """Return the volume of a hypersphere.
+
+    If `dim` is not an integer, this function raises :exc:`TypeError`.
+
+    """
+    if not isinstance(dim, INTEGRAL_TYPES):
+        msg = 'dimension must be an integral type, not {}'
+        raise TypeError(msg.format(type(dim)))
     return radius ** dim * pi ** (0.5 * dim) / gamma(0.5 * dim + 1)
 
 
@@ -209,8 +256,7 @@ def vector_density_goodness_of_fit(
         plot=False,
         normalized=True,
         return_dict=False):
-    """
-    Transform arbitrary multivariate continuous samples
+    """Transform arbitrary multivariate continuous samples
     to unif01 distribution via nearest neighbor distribution [1,2,3]
     and assess goodness of fit via binned Pearson's chi^2 test.
 
@@ -221,12 +267,27 @@ def vector_density_goodness_of_fit(
     Inputs:
         samples - a list of real-vector-valued samples from a distribution
         probs - a list of probability densities evaluated at those samples
+
+    If no samples are provided, then this function raises a
+    :exc:`ValueError`. If the number of samples does not equal the
+    number of probabilities, then this function raises
+    :exc:`ValueError`. If the dimension of the first sample is zero,
+    this function raises :exc:`TypeError`. If the number of samples is
+    less than or equal to ``1000 * dim``, where ``dim`` is the dimension
+    of the first sample, then this function raises
+    :exc:`.TooFewSamples`.
+
     """
-    assert len(samples)
-    assert len(samples) == len(probs)
+    if not samples:
+        raise ValueError('unable to compute fit of zero samples')
+    if len(probs) != len(samples):
+        msg = 'number of probabilities ({}) must equal number of samples ({})'
+        raise ValueError(msg.format(len(probs), len(samples)))
     dim = get_dim(samples[0])
-    assert dim
-    assert len(samples) > 1000 * dim, 'WARNING imprecision; use more samples'
+    if dim == 0:
+        raise TypeError('unable to compute fit in dimension zero')
+    if len(samples) <= 1000 * dim:
+        raise TooFewSamples('got {} samples', len(samples))
     radii = get_nearest_neighbor_distances(samples)
     density = len(samples) * numpy.array(probs)
     volume = volume_of_sphere(dim, radii)
@@ -240,8 +301,17 @@ def trivial_density_goodness_of_fit(
         plot=False,
         normalized=True,
         return_dict=False):
-    assert len(samples)
-    assert all(sample == samples[0] for sample in samples)
+    """Return the trivial goodness-of-fit for samples that are all equal.
+
+    If no samples are provided, then this function raises
+    :exc:`ValueError`. If any pair of samples is different, then this
+    function raises :exc:`ValueError`.
+
+    """
+    if not samples:
+        raise ValueError('unable to compute fit of zero samples')
+    if any(sample != samples[0] for sample in samples):
+        raise ValueError('some samples are not equal')
     result = {'gof': 1.0}
     if not normalized:
         result['norm'] = probs[0]
@@ -262,8 +332,13 @@ def auto_density_goodness_of_fit(
     - density_goodness_of_fit
     - vector_density_goodness_of_fit
     - trivial_density_goodness_of_fit
+
+    If no samples are provided, then this function raises
+    :exc:`ValueError`.
+
     """
-    assert len(samples)
+    if not samples:
+        raise ValueError('unable to compute fit of zero samples')
     dim = get_dim(samples[0])
     if dim == 0:
         fun = trivial_density_goodness_of_fit
@@ -291,7 +366,9 @@ def discrete_goodness_of_fit(
         probs_dict = {i: p / norm for i, p in probs_dict.items()}
     counts = defaultdict(lambda: 0)
     for sample in samples:
-        assert sample in probs_dict
+        if sample not in probs_dict:
+            msg = 'no probability given for sample {}'
+            raise ValueError(msg.format(sample))
         counts[sample] += 1
     items = [(prob, counts.get(i, 0)) for i, prob in probs_dict.items()]
     items.sort(reverse=True)
@@ -300,7 +377,8 @@ def discrete_goodness_of_fit(
         items = items[:truncate_beyond]
     probs = [prob for prob, count in items]
     counts = [count for prob, count in items]
-    assert sum(counts) > 100, 'WARNING imprecision; use more samples'
+    if sum(counts) <= 100:
+        raise TooFewSamples('got {} samples', sum(counts))
     return multinomial_goodness_of_fit(
         probs,
         counts,
@@ -327,7 +405,9 @@ def split_discrete_continuous(data):
             continuous += c
         return tuple(discrete), continuous
     elif isinstance(data, numpy.ndarray):
-        assert data.dtype in [numpy.float64, numpy.float32]
+        if data.dtype not in (numpy.float64, numpy.float32):
+            msg = 'data type must be numpy.float64 or numpy.float32, not {}'
+            raise TypeError(msg.format(data.dtype))
         return (None,) * len(data), list(map(float, data))
     else:
         raise TypeError(
@@ -345,8 +425,13 @@ def mixed_density_goodness_of_fit(samples, probs, plot=False, normalized=True):
     Inputs:
         samples - a list of plain-old-data samples from a distribution
         probs - a list of probability densities evaluated at those samples
+
+    If no samples are provided, then this function raises
+    :exc:`ValueError`.
+
     """
-    assert len(samples)
+    if not samples:
+        raise ValueError('unable to compute fit of zero samples')
     discrete_samples = []
     strata = defaultdict(lambda: ([], []))
     for sample, prob in zip(samples, probs):

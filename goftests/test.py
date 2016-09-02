@@ -32,6 +32,9 @@ try:
     from itertools import izip as zip
 except ImportError:
     pass
+from unittest import TestCase
+from unittest import skip
+
 import numpy
 import scipy.stats
 from numpy import pi
@@ -41,6 +44,7 @@ from nose.tools import assert_almost_equal
 from nose.tools import assert_equal
 from nose.tools import assert_greater
 from nose.tools import assert_less
+
 from goftests import seed_all
 from goftests import get_dim
 from goftests import multinomial_goodness_of_fit
@@ -49,6 +53,7 @@ from goftests import auto_density_goodness_of_fit
 from goftests import mixed_density_goodness_of_fit
 from goftests import split_discrete_continuous
 from goftests import volume_of_sphere
+from goftests import TooFewSamples
 
 NUM_BASE_SAMPLES = 250
 
@@ -57,23 +62,115 @@ NUM_SAMPLES_SCALE = 1000
 TEST_FAILURE_RATE = 5e-4
 
 
-def test_multinomial_goodness_of_fit():
-    for dim in range(2, 20):
-        yield _test_multinomial_goodness_of_fit, dim
+class TestMultinomialGoodnessOfFit(TestCase):
+
+    def test_wrong_number_of_counts(self):
+        with self.assertRaises(ValueError):
+            probs = [0.5, 0.5]
+            counts = [1, 1, 1]
+            total_count = 3
+            multinomial_goodness_of_fit(probs, counts, total_count)
+
+    def test_wrong_total_count(self):
+        with self.assertRaises(ValueError):
+            probs = [0.5, 0.5]
+            counts = [1, 1]
+            total_count = 3
+            multinomial_goodness_of_fit(probs, counts, total_count)
+
+    def test_probability_too_high(self):
+        with self.assertRaises(ValueError):
+            probs = [1.5, 0.5]
+            counts = [1, 1]
+            total_count = 2
+            multinomial_goodness_of_fit(probs, counts, total_count)
+
+    def test_too_few_samples(self):
+        with self.assertRaises(TooFewSamples):
+            probs = [0.5, 0.5]
+            counts = [1, 1]
+            total_count = 2
+            multinomial_goodness_of_fit(probs, counts, total_count)
+
+    def test_dimensions(self):
+        seed_all(0)
+        for dim in range(2, 20):
+            sample_count = int(1e5)
+            probs = numpy.random.dirichlet([1] * dim)
+
+            counts = numpy.random.multinomial(sample_count, probs)
+            p_good = multinomial_goodness_of_fit(probs, counts, sample_count)
+            assert_greater(p_good, TEST_FAILURE_RATE)
+
+            unif_counts = numpy.random.multinomial(sample_count,
+                                                   [1 / dim] * dim)
+            p_bad = multinomial_goodness_of_fit(probs, unif_counts,
+                                                sample_count)
+            assert_less(p_bad, TEST_FAILURE_RATE)
 
 
-def _test_multinomial_goodness_of_fit(dim):
-    seed_all(0)
-    sample_count = int(1e5)
-    probs = numpy.random.dirichlet([1] * dim)
+class TestAutoDensityGoodnessOfFit(TestCase):
 
-    counts = numpy.random.multinomial(sample_count, probs)
-    p_good = multinomial_goodness_of_fit(probs, counts, sample_count)
-    assert_greater(p_good, TEST_FAILURE_RATE)
+    def test_auto_no_samples(self):
+        with self.assertRaises(ValueError):
+            samples = []
+            probs = []
+            auto_density_goodness_of_fit(samples, probs)
 
-    unif_counts = numpy.random.multinomial(sample_count, [1. / dim] * dim)
-    p_bad = multinomial_goodness_of_fit(probs, unif_counts, sample_count)
-    assert_less(p_bad, TEST_FAILURE_RATE)
+    def test_univariate_wrong_number_of_probabilities(self):
+        with self.assertRaises(ValueError):
+            samples = [1, 2]
+            probs = [0.5, 0.5, 0.5]
+            auto_density_goodness_of_fit(samples, probs)
+
+    def test_univariate_too_few_samples(self):
+        with self.assertRaises(TooFewSamples):
+            samples = [1, 2]
+            probs = [0.5, 0.5]
+            auto_density_goodness_of_fit(samples, probs)
+
+    def test_vector_no_samples(self):
+        with self.assertRaises(ValueError):
+            samples = []
+            probs = []
+            auto_density_goodness_of_fit(samples, probs)
+
+    def test_vector_wrong_number_of_probabilities(self):
+        with self.assertRaises(ValueError):
+            samples = [1, 2]
+            probs = [0.5, 0.5, 0.5]
+            auto_density_goodness_of_fit(samples, probs)
+
+    @skip('auto_density delegates dimension zero vector to trivial_density')
+    def test_vector_dimension_zero(self):
+        with self.assertRaises(TypeError):
+            samples = [[]]
+            probs = [0.5]
+            auto_density_goodness_of_fit(samples, probs)
+
+    def test_vector_too_few_samples(self):
+        with self.assertRaises(TooFewSamples):
+            samples = [[0, 1], [1, 0]]
+            probs = [0.5, 0.5]
+            auto_density_goodness_of_fit(samples, probs)
+
+
+class TestDiscreteGoodnessOfFit(TestCase):
+
+    def test_missing_probability(self):
+        with self.assertRaises(ValueError):
+            samples = [1, 2]
+            probs_dict = {1: 0.5}
+            discrete_goodness_of_fit(samples, probs_dict)
+
+
+class TestMixedDensityGoodnessOfFit(TestCase):
+
+    def test_no_samples(self):
+        with self.assertRaises(ValueError):
+            samples = []
+            probs = []
+            mixed_density_goodness_of_fit(samples, probs)
 
 
 def test_volume_of_sphere():
