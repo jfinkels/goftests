@@ -29,17 +29,21 @@
 
 from __future__ import division
 from collections import defaultdict
-from math import gamma
 try:
     from itertools import izip as zip
 except ImportError:
     pass
+import math
 import random
+import statistics
 import sys
 
-import numpy
-import numpy.random
-from numpy import pi
+try:
+    import numpy
+except ImportError:
+    is_numpy_available = False
+else:
+    is_numpy_available = True
 from scipy.spatial import cKDTree
 
 from .utils import chi2sf
@@ -52,12 +56,16 @@ NoneType = type(None)
 INTEGRAL_TYPES = (int, )
 
 #: Data types for continuous random variables.
-CONTINUOUS_TYPES = (float, numpy.float32, numpy.float64)
+CONTINUOUS_TYPES = (float, )
+if is_numpy_available:
+    CONTINUOUS_TYPES += (numpy.float32, numpy.float64)
 
 #: Data types for discrete random variables.
 #:
 #: For Python 2.7, this tuple also includes `long` and `basestring`.
-DISCRETE_TYPES = (NoneType, bool, int, str, numpy.int32, numpy.int64)
+DISCRETE_TYPES = (NoneType, bool, int, str)
+if is_numpy_available:
+    DISCRETE_TYPES += (numpy.int32, numpy.int64)
 
 if sys.version_info < (3, ):
     # `str` is a subclass of `basestring`, so this is doing a little
@@ -68,7 +76,6 @@ if sys.version_info < (3, ):
 
 def seed_all(seed):
     random.seed(seed)
-    numpy.random.seed(seed)
 
 
 def get_dim(thing):
@@ -133,13 +140,12 @@ def unif01_goodness_of_fit(samples, plot=False):
     """
     Bin uniformly distributed samples and apply Pearson's chi^2 test.
     """
-    samples = numpy.array(samples, dtype=float)
-    assert samples.min() >= 0.0
-    assert samples.max() <= 1.0
+    assert min(samples) >= 0.0
+    assert max(samples) <= 1.0
     bin_count = int(round(len(samples) ** 0.333))
     assert bin_count >= 7, 'WARNING imprecise test, use more samples'
-    probs = numpy.ones(bin_count, dtype=numpy.float) / bin_count
-    counts = numpy.zeros(bin_count, dtype=numpy.int)
+    probs = [1 / bin_count] * bin_count
+    counts = [0] * bin_count
     for sample in samples:
         counts[min(bin_count - 1, int(bin_count * sample))] += 1
     return multinomial_goodness_of_fit(probs, counts, len(samples), plot=plot)
@@ -159,9 +165,9 @@ def exp_goodness_of_fit(
     """
     result = {}
     if not normalized:
-        result['norm'] = numpy.mean(samples)
-        samples /= result['norm']
-    unif01_samples = numpy.exp(-samples)
+        result['norm'] = statistics.mean(samples)
+        samples = [x / result['norm'] for x in samples]
+    unif01_samples = [math.exp(-x) for x in samples]
     result['gof'] = unif01_goodness_of_fit(unif01_samples, plot=plot)
     return result if return_dict else result['gof']
 
@@ -184,22 +190,25 @@ def density_goodness_of_fit(
     assert len(samples) > 100, 'WARNING imprecision; use more samples'
     pairs = list(zip(samples, probs))
     pairs.sort()
-    samples = numpy.array([x for x, p in pairs])
-    probs = numpy.array([p for x, p in pairs])
-    density = len(samples) * numpy.sqrt(probs[1:] * probs[:-1])
-    gaps = samples[1:] - samples[:-1]
-    exp_samples = density * gaps
+    samples = [x for x, p in pairs]
+    probs = [p for x, p in pairs]
+    density = [
+        len(samples) * math.sqrt(p * q)
+        for p, q in zip(probs[:-1], probs[1:])
+    ]
+    gaps = [q - p for p, q in zip(samples[:-1], samples[1:])]
+    exp_samples = [d * g for d, g in zip(density, gaps)]
     return exp_goodness_of_fit(exp_samples, plot, normalized, return_dict)
 
 
 def volume_of_sphere(dim, radius):
     assert isinstance(dim, INTEGRAL_TYPES)
-    return radius ** dim * pi ** (0.5 * dim) / gamma(0.5 * dim + 1)
+    return radius ** dim * math.pi ** (0.5 * dim) / math.gamma(0.5 * dim + 1)
 
 
 def get_nearest_neighbor_distances(samples):
     if not hasattr(samples[0], '__iter__'):
-        samples = numpy.array([samples]).T
+        samples = [(s, ) for s in samples]
     distances, indices = cKDTree(samples).query(samples, k=2)
     return distances[:, 1]
 
@@ -229,9 +238,9 @@ def vector_density_goodness_of_fit(
     assert dim
     assert len(samples) > 1000 * dim, 'WARNING imprecision; use more samples'
     radii = get_nearest_neighbor_distances(samples)
-    density = len(samples) * numpy.array(probs)
-    volume = volume_of_sphere(dim, radii)
-    exp_samples = density * volume
+    density = [len(samples) * p for p in probs]
+    volume = [volume_of_sphere(dim, r) for r in radii]
+    exp_samples = [v * d for v, d in zip(volume, density)]
     return exp_goodness_of_fit(exp_samples, plot, normalized, return_dict)
 
 
@@ -327,7 +336,7 @@ def split_discrete_continuous(data):
             discrete.append(d)
             continuous += c
         return tuple(discrete), continuous
-    elif isinstance(data, numpy.ndarray):
+    elif is_numpy_available and isinstance(data, numpy.ndarray):
         assert data.dtype in [numpy.float64, numpy.float32]
         return (None,) * len(data), list(map(float, data))
     else:
