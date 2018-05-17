@@ -37,10 +37,10 @@ except ImportError:
 import random
 import sys
 
+import annoy
 import numpy
 import numpy.random
 from numpy import pi
-from scipy.spatial import cKDTree
 
 from .utils import chi2sf
 
@@ -197,11 +197,23 @@ def volume_of_sphere(dim, radius):
     return radius ** dim * pi ** (0.5 * dim) / gamma(0.5 * dim + 1)
 
 
-def get_nearest_neighbor_distances(samples):
+def get_nearest_neighbor_distances(dim, samples):
+
+    def nn_dist(i):
+        return t.get_nns_by_item(i, 2, include_distances=True)[1][1]
+
     if not hasattr(samples[0], '__iter__'):
         samples = numpy.array([samples]).T
-    distances, indices = cKDTree(samples).query(samples, k=2)
-    return distances[:, 1]
+
+    f = dim  # dimension of each vector
+    t = annoy.AnnoyIndex(f, metric='euclidean')
+    for i, sample in enumerate(samples):
+        t.add_item(i, sample)
+
+    num_trees = 10  # higher is more accurate
+    t.build(num_trees)
+
+    return numpy.array(list(map(nn_dist, range(len(samples)))))
 
 
 def vector_density_goodness_of_fit(
@@ -228,7 +240,7 @@ def vector_density_goodness_of_fit(
     dim = get_dim(samples[0])
     assert dim
     assert len(samples) > 1000 * dim, 'WARNING imprecision; use more samples'
-    radii = get_nearest_neighbor_distances(samples)
+    radii = get_nearest_neighbor_distances(dim, samples)
     density = len(samples) * numpy.array(probs)
     volume = volume_of_sphere(dim, radii)
     exp_samples = density * volume

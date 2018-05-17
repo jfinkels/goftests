@@ -67,7 +67,7 @@ config = {
     'maintainer': 'Fritz Obermeyer',
     'maintainer_email': 'fritz.obermeyer@gmail.com',
     'license': 'Revised BSD',
-    'install_requires': ['numpy', 'scipy'],
+    'install_requires': ['annoy', 'numpy'],
     'packages': ['goftests'],
     'test_suite': 'goftests.test',
     'include_package_data': True,
