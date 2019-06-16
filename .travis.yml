@@ -1,12 +1,14 @@
 sudo: false
+dist: xenial
 language: python
 cache: pip
 python:
   - 2.7
-  - 3.4
   - 3.5
+  - 3.6
+  - 3.7
 before_install:
-  - pip install --upgrade pip
+  - pip install --upgrade pip setuptools wheel
 install:
   - pip install -r requirements-test.txt
 script:
